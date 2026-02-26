@@ -1,0 +1,97 @@
+plugins {
+    id 'java'
+    id 'com.gradleup.shadow' version '9.2.2'
+}
+
+group = 'me.chrommob'
+version = '1.0.0'
+
+repositories {
+    mavenCentral()
+    mavenLocal()
+    maven { name = 'jitpack'; url = 'https://jitpack.io/' }
+    maven { name = 'spigotmc'; url = 'https://hub.spigotmc.org/nexus/content/groups/public/' }
+    maven { name = 'nightexpress'; url = 'https://repo.nightexpressdev.com/releases' }
+}
+
+// When built as part of the MineStore fork (../api exists), the root build supplies api/common/classloader.
+// When built standalone: fetch MineStoreRecode from GitHub and build the API module (see task fetchMineStoreApi).
+// Ref can be a branch (e.g. master) or commit SHA: -PminestoreRef=master or -PminestoreRef=587bb5b10c7c1ae931d954b441f6f9f80a835055
+def minestoreRef = findProperty('minestoreRef') ?: 'master'
+def useLocalMineStore = file('../api').exists()
+def isCommitSha = minestoreRef ==~ /[0-9a-f]{40}/
+def minestoreArchiveUrl = isCommitSha
+    ? "https://github.com/ChromMob/MineStoreRecode/archive/${minestoreRef}.zip"
+    : "https://github.com/ChromMob/MineStoreRecode/archive/refs/heads/${minestoreRef}.zip"
+def minestoreBuildDir = layout.buildDirectory.dir("minestore-recode").get().asFile
+def minestoreExtractedName = "MineStoreRecode-${minestoreRef}"
+def minestoreApiLibs = file("${minestoreBuildDir}/${minestoreExtractedName}/api/build/libs")
+
+// Fetch MineStoreRecode from GitHub, extract, and build only the API module.
+tasks.register('fetchMineStoreApi') {
+    onlyIf { !useLocalMineStore }
+    group = 'build setup'
+    description = 'Fetch MineStoreRecode from GitHub and build the API module for compile-only dependency'
+    def zipFile = file("${minestoreBuildDir}/MineStoreRecode-${minestoreRef}.zip")
+    def extractedDir = file("${minestoreBuildDir}/${minestoreExtractedName}")
+    outputs.dir(minestoreApiLibs)
+    doLast {
+        minestoreBuildDir.mkdirs()
+        if (!zipFile.exists()) {
+            logger.lifecycle("Downloading MineStoreRecode ${minestoreRef} from GitHub...")
+            new URL(minestoreArchiveUrl).withInputStream { new FileOutputStream(zipFile) << it }
+        }
+        def extractedGradlewBat = new File(extractedDir, 'gradlew.bat')
+        def extractedGradlewSh = new File(extractedDir, 'gradlew')
+        def needsExtraction = !extractedDir.exists() || (!extractedGradlewBat.exists() && !extractedGradlewSh.exists())
+        if (needsExtraction) {
+            if (extractedDir.exists()) {
+                extractedDir.deleteDir()
+            }
+            logger.lifecycle("Extracting MineStoreRecode...")
+            copy {
+                from zipTree(zipFile)
+                into minestoreBuildDir
+            }
+        }
+        def existingJars = fileTree(minestoreApiLibs).matching { include 'MineStore-API-*.jar' }.files
+        if (existingJars.isEmpty()) {
+            logger.lifecycle("Building MineStore API module...")
+            def gradlew = new File(extractedDir, 'gradlew.bat')
+            if (!gradlew.exists()) gradlew = new File(extractedDir, 'gradlew')
+            exec {
+                workingDir extractedDir
+                executable gradlew.absolutePath
+                args = [':MineStore-API:shadowJar', '--no-daemon', '-q']
+            }
+        }
+    }
+}
+
+tasks.named('compileJava').configure {
+    dependsOn fetchMineStoreApi
+}
+
+dependencies {
+    if (!useLocalMineStore) {
+        compileOnly fileTree(minestoreApiLibs).matching { include 'MineStore-API-*.jar' }
+    }
+    compileOnly 'org.spigotmc:spigot-api:1.21.4-R0.1-SNAPSHOT'
+    compileOnly 'su.nightexpress.coinsengine:CoinsEngine:2.6.0'
+}
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_1_8
+    targetCompatibility = JavaVersion.VERSION_1_8
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+}
+
+shadowJar {
+    archiveClassifier.set('')
+    archiveFileName.set("MineStore-CoinsEngine-${version}.jar")
+}
+
+build.dependsOn shadowJar

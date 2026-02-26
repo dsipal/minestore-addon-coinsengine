@@ -1,0 +1,5 @@
+main-class: me.chrommob.minestore.coinsengine.CoinsEngineAddon
+name: MineStore-CoinsEngine
+version: "1.0.0"
+description: Use a CoinsEngine currency for all MineStore virtual currency transactions
+authors: [ChromMob]
